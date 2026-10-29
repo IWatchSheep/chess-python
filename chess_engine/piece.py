@@ -1,34 +1,37 @@
-﻿"""Piece representations and helper methods."""
+﻿"""One chess piece (or an empty square).
+
+Pieces are frozen (immutable). To "change" a square, put a new Piece there.
+"""
 
 from dataclasses import dataclass
+
 from .constants import Color, EMPTY, WHITE, BLACK, PIECE_VALUES
 
 
 @dataclass(frozen=True, slots=True)
 class Piece:
-    type: str  # 'P', 'N', 'B', 'R', 'Q', 'K' or '\0'
+    type: str   # 'P','N','B','R','Q','K' or '\0' for empty
     color: Color
 
     @property
     def is_empty(self) -> bool:
-        return self.color == EMPTY or self.type == '\0'
+        return self.color == EMPTY or self.type == "\0"
 
     @property
     def symbol(self) -> str:
-        """Returns the display character: uppercase for White, lowercase for Black, space for Empty."""
+        """Board display: 'P' white, 'p' black, ' ' empty."""
         if self.is_empty:
-            return ' '
+            return " "
         if self.color == WHITE:
             return self.type
         return self.type.lower()
 
     @property
     def key_char(self) -> str:
-        """Character used in position hash keys (following C implementation):
-        Empty = '.', White = lowercase, Black = uppercase.
-        """
+        """Character used inside repetition keys (C port style)."""
         if self.is_empty:
-            return '.'
+            return "."
+        # White = lowercase, Black = uppercase (matches original C hash).
         if self.color == WHITE:
             return self.type.lower()
         return self.type.upper()
@@ -39,5 +42,5 @@ class Piece:
 
 
 def empty_piece() -> Piece:
-    """Returns an empty piece."""
-    return Piece(type='\0', color=EMPTY)
+    """A blank square."""
+    return Piece(type="\0", color=EMPTY)

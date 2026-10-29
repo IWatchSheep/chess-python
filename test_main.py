@@ -204,6 +204,115 @@ class TestMainCli(unittest.TestCase):
         self.assertIsNone(parse_bounded_int("99999999999999999999", 1, 6))
         self.assertEqual(parse_bounded_int("3", 1, 6), 3)
 
+    def _play(self, s: GameSession, start: str, dest: str, promo: str = "") -> None:
+        with contextlib.redirect_stdout(self.buf):
+            handle_square_entry(s, start)
+            handle_square_entry(s, dest)
+            if promo:
+                handle_promotion_choice(s, promo)
+            handle_finalize(s, "F")
+
+    def test_memory_after_one_finalize(self) -> None:
+        s = GameSession()
+        self._play(s, "e2", "e4")
+        self.buf = io.StringIO()
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "memory")
+        out = self.buf.getvalue()
+        self.assertIn("MEMORY BEGIN", out)
+        self.assertIn("PAST 1 e2e4 White", out)
+        self.assertIn("CURRENT: none (preview a destination first).", out)
+        self.assertIn("WINDOW: 1 PAST", out)
+        self.assertIn("MEMORY END", out)
+        self.assertNotIn("PAST 2", out)
+
+    def test_memory_preview_and_discard_keeps_past(self) -> None:
+        s = GameSession()
+        self._play(s, "e2", "e4")
+        with contextlib.redirect_stdout(self.buf):
+            handle_square_entry(s, "e7")
+            handle_square_entry(s, "e5")
+        self.buf = io.StringIO()
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "memory")
+        out = self.buf.getvalue()
+        self.assertIn("PAST 1 e2e4 White", out)
+        self.assertIn("CURRENT e7e5 Black", out)
+        self.assertIn("WINDOW: 1 PAST + CURRENT", out)
+
+        with contextlib.redirect_stdout(self.buf):
+            handle_discard_preview(s, "p")
+        self.buf = io.StringIO()
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "memory")
+        out = self.buf.getvalue()
+        self.assertIn("PAST 1 e2e4 White", out)
+        self.assertIn("CURRENT: none (preview a destination first).", out)
+        self.assertEqual(len(s.memory.past), 1)
+
+    def test_memory_keeps_only_four_past(self) -> None:
+        s = GameSession()
+        moves = [
+            ("e2", "e4"),
+            ("e7", "e5"),
+            ("g1", "f3"),
+            ("b8", "c6"),
+            ("f1", "c4"),
+        ]
+        for start, dest in moves:
+            self._play(s, start, dest)
+
+        self.buf = io.StringIO()
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "memory")
+        out = self.buf.getvalue()
+        self.assertNotIn("PAST 1 e2e4", out)
+        self.assertIn("PAST 1 e7e5 Black", out)
+        self.assertIn("PAST 2 g1f3 White", out)
+        self.assertIn("PAST 3 b8c6 Black", out)
+        self.assertIn("PAST 4 f1c4 White", out)
+        self.assertNotIn("PAST 5", out)
+        self.assertIn("WINDOW: 4 PAST", out)
+        self.assertEqual(len(s.memory.past), 4)
+
+    def test_memory_restart_clears_past(self) -> None:
+        s = GameSession()
+        self._play(s, "e2", "e4")
+        self.assertEqual(len(s.memory.past), 1)
+        with contextlib.redirect_stdout(self.buf):
+            handle_game_control(s, "restart")
+        self.assertEqual(len(s.memory.past), 0)
+        self.assertIsNone(s.memory.current)
+
+    def test_memory_fen_load_clears_or_keeps(self) -> None:
+        s = GameSession()
+        self._play(s, "e2", "e4")
+        self.assertEqual(len(s.memory.past), 1)
+
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "fen not-a-real-fen")
+        self.assertEqual(len(s.memory.past), 1)
+
+        with contextlib.redirect_stdout(self.buf):
+            process_command(
+                s,
+                "fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            )
+        self.assertEqual(len(s.memory.past), 0)
+        self.assertIsNone(s.memory.current)
+
+    def test_memory_stores_promotion_letter(self) -> None:
+        s = GameSession()
+        ok, _ = s.board.load_fen("8/P7/8/8/8/8/8/4K2k w - - 0 1")
+        self.assertTrue(ok)
+        s.tracker.init_from_board(s.board)
+        self._play(s, "a7", "a8", promo="Q")
+        self.buf = io.StringIO()
+        with contextlib.redirect_stdout(self.buf):
+            process_command(s, "memory")
+        out = self.buf.getvalue()
+        self.assertIn("PAST 1 a7a8q White", out)
+
 
 if __name__ == "__main__":
     unittest.main()

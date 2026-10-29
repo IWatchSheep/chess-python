@@ -1,4 +1,8 @@
-﻿"""Piece ID tracking across moves and board snapshots for analytical calculations."""
+﻿"""Track each piece by a stable ID (1..32) across moves.
+
+The board only stores what piece type is on a square. The Tracker remembers
+*which* knight/pawn it was, so calc/replies reports can say LOST/GAINED per piece.
+"""
 
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
@@ -40,6 +44,13 @@ def follow_piece(
     before: Board, move: Move, row: int, col: int
 ) -> Tuple[int, int, str, FollowCase]:
     """Follows a single piece across a move for piece-tracking reports."""
+    from .constants import in_bounds
+
+    if not in_bounds(row, col):
+        return -1, -1, "\0", FollowCase.FOLLOW_CAPTURED
+    if not (in_bounds(move.sr, move.sc) and in_bounds(move.er, move.ec)):
+        return row, col, before.grid[row][col].type, FollowCase.FOLLOW_STAYS
+
     piece = before.grid[row][col]
     mover = before.grid[move.sr][move.sc]
 
@@ -145,8 +156,9 @@ class Tracker:
                 to_r, to_c, _, outcome = follow_piece(before, move, r, c)
                 if outcome == FollowCase.FOLLOW_CAPTURED:
                     captured[pid] = True
-                else:
+                elif 0 <= to_r < BOARD_SIZE and 0 <= to_c < BOARD_SIZE:
                     after_grid[to_r][to_c] = pid
+                # else: skip bad coordinates (defensive; should not happen)
 
         return after_grid, captured
 

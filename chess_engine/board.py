@@ -1,9 +1,18 @@
-﻿"""Board state, FEN import/export, repetition tracking, and draw detection."""
+﻿"""Board state: pieces, turn, castling, en passant, draws, FEN.
+
+Think of Board as the whole game position — not just the 8x8 grid.
+
+history: list of position keys for threefold / fivefold claims.
+  Cleared on pawn moves and captures (those cannot repeat a prior key path).
+  Capped at HISTORY_MAX_LEN so it cannot grow without bound.
+"""
 
 from typing import List, Optional, Tuple
+
 from .constants import (
-    BOARD_SIZE, TOTAL_SQUARES, Color, EMPTY, WHITE, BLACK,
-    in_bounds, opposite, parse_square
+    BOARD_SIZE, Color, EMPTY, WHITE, BLACK,
+    HISTORY_MAX_LEN, FEN_NUMBER_MAX_DIGITS,
+    in_bounds, opposite, parse_square, parse_nonneg_int,
 )
 from .piece import Piece, empty_piece
 
@@ -83,8 +92,12 @@ class Board:
         self.record_position()
 
     def record_position(self) -> None:
-        """Appends the current position's hash key to history."""
+        """Remember this position for repetition draws (oldest dropped if full)."""
         self.history.append(self.position_key())
+        # Cap length so a long quiet game cannot grow memory without bound.
+        if len(self.history) > HISTORY_MAX_LEN:
+            overflow = len(self.history) - HISTORY_MAX_LEN
+            del self.history[:overflow]
 
     def position_key(self) -> str:
         """Computes a standardized 72-character key representing the position."""
@@ -378,17 +391,17 @@ class Board:
             new_b.ep_row = -1
             new_b.ep_col = -1
 
-        # Fields 5 & 6
+        # Fields 5 & 6 (digit-length capped — avoids huge-int DoS from bad FEN)
         if len(fields) == 6:
-            try:
-                halfmove = int(fields[4])
-                fullmove = int(fields[5])
-                if halfmove < 0 or fullmove < 1:
-                    raise ValueError()
-                new_b.halfmove_clock = halfmove
-                new_b.fullmove_number = fullmove
-            except ValueError:
-                return False, "halfmove clock and move number must be whole numbers (move number at least 1)"
+            halfmove = parse_nonneg_int(fields[4], FEN_NUMBER_MAX_DIGITS)
+            fullmove = parse_nonneg_int(fields[5], FEN_NUMBER_MAX_DIGITS)
+            if halfmove is None or fullmove is None or fullmove < 1:
+                return False, (
+                    "halfmove clock and move number must be whole numbers "
+                    "(move number at least 1)"
+                )
+            new_b.halfmove_clock = halfmove
+            new_b.fullmove_number = fullmove
 
         # Verify king presence and legality
         if is_in_check(new_b, opposite(new_b.turn)):

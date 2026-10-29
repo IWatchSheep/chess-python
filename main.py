@@ -64,16 +64,19 @@ def main() -> None:
             continue
 
         try:
-            result = process_command(session, line.strip())
+            result = process_command(session, line)
         except Exception as exc:
-            # Belt-and-suspenders: process_command already catches, but keep the loop alive.
+            # process_command already catches most errors; keep the loop alive.
             err(f"Unexpected error: {exc}")
             continue
 
         if result == "quit":
             break
         if result == "unknown":
-            err("Unknown command. Enter a square, or use F, P, N, restart, quit, claim or resign.")
+            err(
+                "Unknown command. Enter a square, or use F, P, N, "
+                "restart, quit, claim or resign."
+            )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,13 @@
-"""CLI command handlers for play and analysis.
+"""CLI commands: how the player types moves and analysis tools.
 
-Play flow lives conceptually in the handlers near the top of PLAY_HANDLERS.
-Analysis tools are registered in ANALYSIS_COMMANDS (name + help + handler).
+Read this file top-down:
+  1. Help text
+  2. Move flow (select square, preview, F / P / N, fen, promotion)
+  3. Analysis handlers (r, replies, loop, goal, memory, ...)
+  4. Command tables used by process_command
+
+Play always goes: start square -> destination preview -> F to finalize.
+Analysis commands only print facts; they never choose a move for you.
 """
 
 from __future__ import annotations
@@ -130,6 +136,7 @@ def handle_fen(session: GameSession, cmd: str) -> bool:
     if ok:
         session.clear_selection()
         session.clear_analysis_options()
+        session.memory.clear()
         session.tracker.init_from_board(session.board)
         print("FEN loaded: practice position set up.")
     else:
@@ -178,6 +185,7 @@ def handle_finalize(session: GameSession, cmd: str) -> bool:
         return True
 
     print(f"FINALIZED: {move_label(session.preview_move)}")
+    session.memory.record_finalized()
     session.tracker.commit(session.board, session.preview_move)
     make_move(session.board, session.preview_move)
     session.board.record_position()
@@ -575,6 +583,14 @@ def handle_trace(session: GameSession, cmd: str) -> bool:
     return True
 
 
+def handle_memory(session: GameSession, cmd: str) -> bool:
+    """memory -> print the five-move window (past + optional current preview)."""
+    if cmd.lower() != "memory":
+        return False
+    session.memory.print_report()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Command tables (dispatch order + help)
 # ---------------------------------------------------------------------------
@@ -606,6 +622,8 @@ ANALYSIS_COMMANDS: Sequence[CommandSpec] = (
                 usage="risk | risk on | risk off"),
     CommandSpec("trace", "step through a move sequence", handle_trace,
                 usage="trace e2e4 e7e5"),
+    CommandSpec("memory", "show the five-move window (past + current preview)", handle_memory,
+                usage="memory"),
 )
 
 # Play / session commands (checked before analysis table in dispatch).

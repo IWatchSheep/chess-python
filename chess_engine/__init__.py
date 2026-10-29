@@ -3,7 +3,8 @@
 from .constants import (
     Color, EMPTY, WHITE, BLACK,
     opposite, color_name,
-    in_bounds, square_index, index_to_row_col, square_text, parse_square
+    in_bounds, square_index, index_to_row_col, square_text, row_col_text,
+    parse_square,
 )
 from .piece import Piece, empty_piece
 from .move import Move, parse_move_text
@@ -25,7 +26,8 @@ from .analysis import (
 __all__ = [
     'Color', 'EMPTY', 'WHITE', 'BLACK',
     'opposite', 'color_name',
-    'in_bounds', 'square_index', 'index_to_row_col', 'square_text', 'parse_square',
+    'in_bounds', 'square_index', 'index_to_row_col', 'square_text', 'row_col_text',
+    'parse_square',
     'Piece', 'empty_piece',
     'Move', 'parse_move_text',
     'Board',

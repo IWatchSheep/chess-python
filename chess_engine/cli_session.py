@@ -1,9 +1,16 @@
-"""Interactive game session state for the two-player CLI."""
+"""Game session: board + where we are in select -> preview -> finalize.
+
+Step flow for every move:
+  PICK_PIECE -> PICK_DESTINATION -> CONFIRM_PREVIEW -> (F plays the move)
+  Promotion inserts CHOOSE_PROMOTION before the preview.
+"""
 
 from enum import Enum
 from typing import Optional
 
-from .constants import in_bounds, square_index, square_text, RED, RESET
+from .constants import (
+    in_bounds, row_col_text, RED, RESET, MAX_COMMAND_CHARS,
+)
 from .move import Move
 from .board import Board
 from .tracker import Tracker
@@ -14,9 +21,14 @@ from .analysis import (
     set_goal_show_risk,
 )
 from .ui import show_step2_after
+from .move_memory import MoveMemory
 
-# Hard cap on a single typed line (FEN + analysis args). Prevents huge-input DoS.
-MAX_COMMAND_CHARS = 512
+# Re-export for tests / callers that imported it from this module.
+__all__ = [
+    "Step", "err", "move_label", "warn_slow_search",
+    "parse_bounded_int", "sanitize_display_text",
+    "GameSession", "MAX_COMMAND_CHARS",
+]
 
 
 class Step(Enum):
@@ -37,9 +49,7 @@ def move_label(move: Move) -> str:
     """Turn a Move into text like 'e2 -> e4'."""
     if not (in_bounds(move.sr, move.sc) and in_bounds(move.er, move.ec)):
         return "?? -> ??"
-    start = square_text(square_index(move.sr, move.sc))
-    end = square_text(square_index(move.er, move.ec))
-    return f"{start} -> {end}"
+    return f"{row_col_text(move.sr, move.sc)} -> {row_col_text(move.er, move.ec)}"
 
 
 def warn_slow_search(depth: int) -> None:
@@ -51,12 +61,11 @@ def warn_slow_search(depth: int) -> None:
 def parse_bounded_int(text: str, lo: int, hi: int) -> Optional[int]:
     """Parse an ASCII decimal integer in [lo, hi], or return None.
 
-    Rejects signs, spaces, and non-ASCII digits so values stay predictable
-    and int() cannot be surprised by unusual Unicode numeric characters.
+    Rejects signs, spaces, non-ASCII digits, and very long digit strings
+    so int() cannot be fed a huge number.
     """
     if not text or not text.isascii() or not text.isdigit():
         return None
-    # Guard absurd digit strings before building a huge int.
     if len(text) > 18:
         return None
     try:
@@ -93,6 +102,7 @@ class GameSession:
         self.distance_view = False
         self.goal = Goal()
         self.second_goal = Goal()
+        self.memory = MoveMemory()
 
     # -- derived flags (same meaning as the old boolean fields) --------------
 
@@ -111,6 +121,7 @@ class GameSession:
         self.selected_row = -1
         self.selected_col = -1
         self.step = Step.PICK_PIECE
+        self.memory.clear_current()
 
     def select_piece(self, row: int, col: int) -> None:
         self.selected_row = row
@@ -124,10 +135,12 @@ class GameSession:
     def clear_preview_keep_piece(self) -> None:
         """P command: stay on the selected piece, drop only the preview."""
         self.step = Step.PICK_DESTINATION
+        self.memory.clear_current()
 
     def invalidate_preview(self) -> None:
         """Preview became illegal; keep selection, ask for a new destination."""
         self.step = Step.PICK_DESTINATION
+        self.memory.clear_current()
 
     def clear_analysis_options(self) -> None:
         """Reset goals / distance / risk (used on restart and FEN load)."""
@@ -141,6 +154,7 @@ class GameSession:
         self.tracker = Tracker(self.board)
         self.clear_selection()
         self.clear_analysis_options()
+        self.memory.clear()
 
     def show_preview_extras(self, move: Move) -> None:
         """Print optional goal / distance notes after a preview."""
@@ -153,5 +167,6 @@ class GameSession:
         """Show BEFORE/AFTER for a legal destination and mark preview ready."""
         show_step2_after(self.board, move)
         self.show_preview_extras(move)
+        self.memory.set_current(self.board, move)
         self.preview_move = move
         self.step = Step.CONFIRM_PREVIEW

@@ -1,12 +1,20 @@
-﻿"""Move generation, legality checking, attack detection, and board updates."""
+﻿"""How pieces move: attacks, legal moves, and applying a move to the board.
+
+Beginner map:
+  piece_attacks / path_clear  — can this piece hit that square?
+  pseudo_legal / legal_move   — is this Move allowed right now?
+  generate_moves              — every legal move for the side to play
+  make_move                   — actually play it (updates clocks, EP, turn)
+"""
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 from .constants import (
-    BOARD_SIZE, TOTAL_SQUARES, Color, EMPTY, WHITE, BLACK,
+    BOARD_SIZE, Color, EMPTY, WHITE, BLACK,
     WHITE_PAWN_START_ROW, BLACK_PAWN_START_ROW,
     KING_START_COL, CASTLE_KINGSIDE_KING_DEST_COL, CASTLE_QUEENSIDE_KING_DEST_COL,
     CASTLE_KINGSIDE_ROOK_DEST_COL, CASTLE_QUEENSIDE_ROOK_DEST_COL,
-    in_bounds, opposite, home_row_for, rook_col_for
+    MAX_SLIDE_STEPS,
+    in_bounds, opposite, home_row_for, rook_col_for,
 )
 from .piece import Piece, empty_piece
 from .move import Move
@@ -42,23 +50,29 @@ def is_queen_move(dr: int, dc: int) -> bool:
 
 
 def path_clear(board: 'Board', sr: int, sc: int, er: int, ec: int) -> bool:
-    """Checks whether all intermediate squares between (sr, sc) and (er, ec) are empty."""
+    """True if every square strictly between start and end is empty.
+
+    Only works for rook/bishop/queen rays (straight or diagonal).
+    Caps steps so a bad step vector cannot loop forever.
+    """
     if sr == er and sc == ec:
         return False
 
-    step_r = 1 if er > sr else (-1 if er < sr else 0)
-    step_c = 1 if ec > sc else (-1 if ec < sc else 0)
+    step_r = 0 if er == sr else (1 if er > sr else -1)
+    step_c = 0 if ec == sc else (1 if ec > sc else -1)
 
     delta_r = abs(er - sr)
     delta_c = abs(ec - sc)
-    is_straight = (step_r == 0 or step_c == 0)
-    is_diag = (delta_r == delta_c)
-    if not is_straight and not is_diag:
+    straight = step_r == 0 or step_c == 0
+    diagonal = delta_r == delta_c
+    if not straight and not diagonal:
         return False
 
     curr_r = sr + step_r
     curr_c = sc + step_c
-    while curr_r != er or curr_c != ec:
+    for _ in range(MAX_SLIDE_STEPS):
+        if curr_r == er and curr_c == ec:
+            return True
         if not in_bounds(curr_r, curr_c):
             return False
         if not board.grid[curr_r][curr_c].is_empty:
@@ -66,7 +80,7 @@ def path_clear(board: 'Board', sr: int, sc: int, er: int, ec: int) -> bool:
         curr_r += step_r
         curr_c += step_c
 
-    return True
+    return False
 
 
 def piece_attacks(board: 'Board', sr: int, sc: int, tr: int, tc: int) -> bool:
@@ -151,7 +165,14 @@ def can_castle(board: 'Board', move: Move, side: Color) -> bool:
     transit_col = CASTLE_KINGSIDE_ROOK_DEST_COL if castle_kingside else CASTLE_QUEENSIDE_ROOK_DEST_COL
     dest_col = CASTLE_KINGSIDE_KING_DEST_COL if castle_kingside else CASTLE_QUEENSIDE_KING_DEST_COL
 
-    if move.sr != home_row or move.sc != KING_START_COL or king_moved:
+    # King must start on e-file home square and land on the castling destination.
+    if (
+        move.sr != home_row
+        or move.er != home_row
+        or move.sc != KING_START_COL
+        or move.ec != dest_col
+        or king_moved
+    ):
         return False
 
     rook_moved = (
@@ -179,14 +200,16 @@ def can_castle(board: 'Board', move: Move, side: Color) -> bool:
 
 def move_is_en_passant(board: 'Board', move: Move, piece: Piece) -> bool:
     """Returns True if move made by piece is an en passant capture."""
-    if piece.type != 'P':
+    if piece.type != "P":
         return False
-    matches_ep = (move.er == board.ep_row and move.ec == board.ep_col)
+    if not in_bounds(move.sr, move.sc) or not in_bounds(move.er, move.ec):
+        return False
+    if not in_bounds(move.sr, move.ec):
+        return False
+    matches_ep = move.er == board.ep_row and move.ec == board.ep_col
     dest_empty = board.grid[move.er][move.ec].is_empty
-    enemy_pawn = (
-        board.grid[move.sr][move.ec].type == 'P' and
-        board.grid[move.sr][move.ec].color == opposite(piece.color)
-    )
+    side_pawn = board.grid[move.sr][move.ec]
+    enemy_pawn = side_pawn.type == "P" and side_pawn.color == opposite(piece.color)
     return matches_ep and dest_empty and enemy_pawn
 
 
@@ -202,9 +225,12 @@ def pawn_move_is_pseudo_legal(board: 'Board', move: Move, pawn: Piece, target: P
         if row_change == direction:
             return True
         intermediate_row = move.sr + direction
-        if (row_change == 2 * direction and
-                move.sr == starting_row and
-                board.grid[intermediate_row][move.sc].is_empty):
+        if (
+            row_change == 2 * direction
+            and move.sr == starting_row
+            and in_bounds(intermediate_row, move.sc)
+            and board.grid[intermediate_row][move.sc].is_empty
+        ):
             return True
 
     # Diagonal captures
@@ -215,11 +241,11 @@ def pawn_move_is_pseudo_legal(board: 'Board', move: Move, pawn: Piece, target: P
         return True
 
     # En passant
-    lands_on_ep = (move.er == board.ep_row and move.ec == board.ep_col)
-    enemy_pawn_present = (
-        board.grid[move.sr][move.ec].type == 'P' and
-        board.grid[move.sr][move.ec].color == opposite(pawn.color)
-    )
+    if not in_bounds(move.sr, move.ec):
+        return False
+    lands_on_ep = move.er == board.ep_row and move.ec == board.ep_col
+    side_pawn = board.grid[move.sr][move.ec]
+    enemy_pawn_present = side_pawn.type == "P" and side_pawn.color == opposite(pawn.color)
     return lands_on_ep and enemy_pawn_present
 
 
@@ -274,28 +300,38 @@ def pseudo_legal(board: 'Board', m: Move) -> bool:
 
 
 def apply_move_to_board(board: 'Board', move: Move) -> None:
-    """Modifies the 8x8 piece grid to reflect the execution of move."""
+    """Update only the piece grid for this move (EP, castle rook, promote).
+
+    Does not change turn, clocks, or castling flags — make_move does that.
+    """
+    if not in_bounds(move.sr, move.sc) or not in_bounds(move.er, move.ec):
+        return
+
     piece = board.grid[move.sr][move.sc]
 
-    # En passant capture
+    # En passant: remove the pawn that was jumped past.
     if move_is_en_passant(board, move, piece):
-        board.grid[move.sr][move.ec] = empty_piece()
+        if in_bounds(move.sr, move.ec):
+            board.grid[move.sr][move.ec] = empty_piece()
 
-    # Castling
-    if piece.type == 'K' and abs(move.ec - move.sc) == 2:
-        king_side = (move.ec > move.sc)
+    # Castling: also slide the rook.
+    if piece.type == "K" and abs(move.ec - move.sc) == 2:
+        king_side = move.ec > move.sc
         rook_from_col = rook_col_for(king_side)
-        rook_to_col = CASTLE_KINGSIDE_ROOK_DEST_COL if king_side else CASTLE_QUEENSIDE_ROOK_DEST_COL
+        rook_to_col = (
+            CASTLE_KINGSIDE_ROOK_DEST_COL if king_side else CASTLE_QUEENSIDE_ROOK_DEST_COL
+        )
         board.grid[move.sr][rook_to_col] = board.grid[move.sr][rook_from_col]
         board.grid[move.sr][rook_from_col] = empty_piece()
 
-    # Move piece to destination
     board.grid[move.sr][move.sc] = empty_piece()
     board.grid[move.er][move.ec] = piece
 
-    # Pawn promotion
-    if piece.type == 'P' and (move.er == 0 or move.er == 7):
-        promo_type = 'Q' if (not move.promotion or move.promotion == '\0') else move.promotion
+    # Pawn on last rank becomes the chosen piece (default Queen).
+    if piece.type == "P" and move.er in (0, 7):
+        promo_type = (
+            "Q" if (not move.promotion or move.promotion == "\0") else move.promotion
+        )
         board.grid[move.er][move.ec] = Piece(type=promo_type, color=piece.color)
 
 
@@ -349,20 +385,27 @@ def update_castle_state(board: 'Board', piece: Piece, m: Move) -> None:
 
 
 def make_move(board: 'Board', m: Move) -> None:
-    """Fully executes a move on the game board and updates all game state."""
+    """Play move on the board: pieces, castling rights, EP, clocks, turn.
+
+    Caller must already know the move is legal. Does not append to history;
+    the CLI calls board.record_position() after a finalized move.
+    """
+    if not in_bounds(m.sr, m.sc) or not in_bounds(m.er, m.ec):
+        return
+
     piece = board.grid[m.sr][m.sc]
     target = board.grid[m.er][m.ec]
-    pawn_move = (piece.type == 'P')
-    capture = (not target.is_empty or move_is_en_passant(board, m, piece))
+    pawn_move = piece.type == "P"
+    capture = (not target.is_empty) or move_is_en_passant(board, m, piece)
 
-    # Opponent rook captured on home square
-    if target.type == 'R':
+    # Capturing a rook on its home square removes that castling right.
+    if target.type == "R":
         mark_rook_at_home_square(board, m.er, m.ec, target.color)
 
     update_castle_state(board, piece, m)
     apply_move_to_board(board, m)
 
-    # En passant square
+    # Double pawn push sets the en-passant target; anything else clears it.
     if pawn_move and abs(m.er - m.sr) == 2:
         board.ep_row = (m.sr + m.er) // 2
         board.ep_col = m.sc
@@ -370,7 +413,7 @@ def make_move(board: 'Board', m: Move) -> None:
         board.ep_row = -1
         board.ep_col = -1
 
-    # 50-move rule and history
+    # Pawn move or capture resets the 50-move clock and repetition list.
     if pawn_move or capture:
         board.halfmove_clock = 0
         board.history = []

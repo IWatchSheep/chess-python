@@ -3,22 +3,18 @@
 import os
 from typing import List, Tuple
 from .constants import (
-    BOARD_SIZE, Color, EMPTY, WHITE, BLACK,
-    RED, CYAN, RESET,
+    BOARD_SIZE, WHITE, BLACK,
+    RESET,
     LIGHT_SQUARE_BG, DARK_SQUARE_BG, LIGHT_TEXT_FG, DARK_TEXT_FG,
     COMPARE_WIDTH,
-    in_bounds, color_name, square_text, square_index,
+    in_bounds, color_name, row_col_text,
     CASTLE_KINGSIDE_KING_DEST_COL, CASTLE_QUEENSIDE_KING_DEST_COL,
     ROOK_KINGSIDE_START_COL, ROOK_QUEENSIDE_START_COL,
-    CASTLE_KINGSIDE_ROOK_DEST_COL, CASTLE_QUEENSIDE_ROOK_DEST_COL
+    CASTLE_KINGSIDE_ROOK_DEST_COL, CASTLE_QUEENSIDE_ROOK_DEST_COL,
 )
-from .piece import Piece, empty_piece
 from .move import Move
 from .board import Board
-from .movegen import (
-    generate_moves, legal_destination_map, make_move,
-    move_is_en_passant
-)
+from .movegen import generate_moves, legal_destination_map, make_move
 
 
 def enable_windows_colors() -> None:
@@ -49,13 +45,13 @@ def print_selection_near_prompt(board: Board, row: int, col: int) -> None:
         return
 
     destinations = selected_destinations(board, row, col)
-    from_sq = f"{chr(ord('a') + col)}{8 - row}"
+    from_sq = row_col_text(row, col)
     dest_list = []
-    # Ranks 8 down to 1, Files a to h
-    for r in range(7, -1, -1):
+    # List destinations rank 8 -> 1, file a -> h (easy to scan).
+    for r in range(BOARD_SIZE - 1, -1, -1):
         for c in range(BOARD_SIZE):
             if destinations[r][c]:
-                dest_list.append(f"{chr(ord('a') + c)}{8 - r}")
+                dest_list.append(row_col_text(r, c))
 
     if dest_list:
         print(f"Selected {from_sq} -> {' '.join(dest_list)}")
@@ -107,9 +103,10 @@ def display(board: Board, selected_row: int = -1, selected_col: int = -1) -> Non
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
                 if destinations[r][c]:
-                    dest_sqs.append(f"{chr(ord('a') + c)}{8 - r}")
+                    dest_sqs.append(row_col_text(r, c))
 
-        print(f"SELECTED: {color_name(piece.color)} {piece.type} at {chr(ord('a') + selected_col)}{8 - selected_row}")
+        at = row_col_text(selected_row, selected_col)
+        print(f"SELECTED: {color_name(piece.color)} {piece.type} at {at}")
         if dest_sqs:
             print(f"LEGAL DESTINATIONS: {' '.join(dest_sqs)}")
         else:
@@ -134,7 +131,7 @@ def list_piece_moves(position: Board, row: int, col: int) -> str:
     for m in moves:
         if m.sr == row and m.sc == col and (m.er, m.ec) not in seen:
             seen.add((m.er, m.ec))
-            result.append(f"{chr(ord('a') + m.ec)}{8 - m.er}")
+            result.append(row_col_text(m.er, m.ec))
 
     return " ".join(result) if result else "(none)"
 
@@ -190,38 +187,46 @@ def print_side_by_side(before: str, after: str, width: int = COMPARE_WIDTH) -> N
 
 def is_en_passant_capture(before: Board, proposed: Move, row: int, col: int) -> bool:
     """Checks if the piece on (row, col) is captured by en passant during proposed move."""
+    if not in_bounds(proposed.sr, proposed.sc):
+        return False
     moving_piece = before.grid[proposed.sr][proposed.sc]
     return (
-        moving_piece.type == 'P' and
-        proposed.er == before.ep_row and
-        proposed.ec == before.ep_col and
-        row == proposed.sr and
-        col == proposed.ec
+        moving_piece.type == "P"
+        and proposed.er == before.ep_row
+        and proposed.ec == before.ep_col
+        and row == proposed.sr
+        and col == proposed.ec
     )
 
 
 def resolve_piece_after_move(
     before: Board, proposed: Move, row: int, col: int
 ) -> Tuple[int, int, bool]:
-    """Determines where a piece on (row, col) ends up after proposed move."""
+    """Where the piece on (row, col) ends up after `proposed`, plus captured flag.
+
+    Returns (after_row, after_col, captured). Captured pieces keep their old
+    square coords; callers should ignore destination maps for them.
+    """
+    if not in_bounds(row, col):
+        return row, col, False
+    if not (in_bounds(proposed.sr, proposed.sc) and in_bounds(proposed.er, proposed.ec)):
+        return row, col, False
+
     after_row = row
     after_col = col
     captured = False
 
-    # Direct capture
     if row == proposed.er and col == proposed.ec:
         captured = True
 
-    # En passant capture
     if is_en_passant_capture(before, proposed, row, col):
         captured = True
 
-    # Castling rook relocation
     moving_piece = before.grid[proposed.sr][proposed.sc]
     is_castling = (
-        moving_piece.type == 'K' and
-        abs(proposed.ec - proposed.sc) == 2 and
-        row == proposed.sr
+        moving_piece.type == "K"
+        and abs(proposed.ec - proposed.sc) == 2
+        and row == proposed.sr
     )
     if is_castling:
         if proposed.ec == CASTLE_KINGSIDE_KING_DEST_COL and col == ROOK_KINGSIDE_START_COL:
@@ -255,7 +260,7 @@ def print_piece_changes(
         for c in range(BOARD_SIZE):
             in_new = new_dest[r][c]
             in_old = old_dest[r][c]
-            sq = f"{chr(ord('a') + c)}{8 - r}"
+            sq = row_col_text(r, c)
             if in_new and not in_old:
                 gained.append(sq)
             elif in_old and not in_new:
@@ -294,24 +299,28 @@ def compare_all_other_pieces(before: Board, after: Board, proposed: Move) -> Non
                 after_row, after_col, captured = resolve_piece_after_move(before, proposed, row, col)
 
                 before_moves = list_piece_moves(before, row, col)
-                before_desc = f"{chr(ord('a') + col)}{8 - row} {piece.symbol}: {before_moves}"
+                before_desc = f"{row_col_text(row, col)} {piece.symbol}: {before_moves}"
 
                 if captured:
-                    after_desc = f"(captured at {chr(ord('a') + col)}{8 - row})"
+                    after_desc = f"(captured at {row_col_text(row, col)})"
                 else:
                     after_piece = after.grid[after_row][after_col]
                     after_moves = list_piece_moves(after, after_row, after_col)
-                    after_desc = f"{chr(ord('a') + after_col)}{8 - after_row} {after_piece.symbol}: {after_moves}"
+                    after_desc = (
+                        f"{row_col_text(after_row, after_col)} "
+                        f"{after_piece.symbol}: {after_moves}"
+                    )
 
                 print_side_by_side(before_desc, after_desc)
                 print_piece_changes(before, after, row, col, after_row, after_col, captured)
 
 
 def show_step2_after(board: Board, proposed: Move) -> None:
-    """Creates a simulated position with `proposed` played, displaying the comparative preview."""
+    """Preview a move: print BEFORE/AFTER for every other piece. Board is not changed."""
     simulated = board.clone()
-    print(f"\nPREVIEW ONLY: {chr(ord('a') + proposed.sc)}{8 - proposed.sr} -> "
-          f"{chr(ord('a') + proposed.ec)}{8 - proposed.er} (NOT PLAYED)")
+    start = row_col_text(proposed.sr, proposed.sc)
+    end = row_col_text(proposed.er, proposed.ec)
+    print(f"\nPREVIEW ONLY: {start} -> {end} (NOT PLAYED)")
     make_move(simulated, proposed)
 
     print("Widen your console to about 140 columns for the two-column report.")
